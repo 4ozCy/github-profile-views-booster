@@ -1,16 +1,5 @@
-const packageJson = require("./package.json");
-const cp = require("child_process");
-
-for (let dep of Object.keys(packageJson.dependencies)) {
-    try {
-        require.resolve(dep);
-    } catch (err) {
-        console.log("Installing dependencies...");
-        cp.execSync(`npm i`);
-    }
-}
-const axios = require("axios");
 const fs = require("fs");
+const axios = require("axios");
 const readline = require("readline");
 const chalk = require("chalk");
 
@@ -22,58 +11,54 @@ try {
     process.exit(1);
 }
 
+const proxies = config.use_proxy
+    ? fs.readFileSync("proxies.txt", "utf8").split("\n").map((p) => p.trim())
+    : [];
+
+const createAxiosInstance = (proxy) => {
+    return axios.create({
+        ...(proxy
+            ? { proxy: { host: proxy.split(":")[0], port: proxy.split(":")[1] || 80 } }
+            : {}),
+        timeout: 5000
+    });
+};
+
 const updateLine = (newLine) => {
     readline.clearLine(process.stdout, 0);
     readline.cursorTo(process.stdout, 0);
     process.stdout.write(newLine);
 };
 
-const run = async () => {
+const sendRequests = async (url, concurrency) => {
     let count = 0;
 
-    while (true) {
-        let url = config.counter_url;
-        try {
-            let response;
-            if (
-                config.use_proxy === "y" ||
-                config.use_proxy === "yes" ||
-                config.use_proxy === "true"
-            ) {
-                const proxies = fs
-                    .readFileSync("proxies.txt", "utf8")
-                    .split("\n");
-                const proxy =
-                    proxies[Math.floor(Math.random() * proxies.length)].trim();
+    const requests = Array.from({ length: concurrency }, async () => {
+        while (true) {
+            const proxy = proxies.length ? proxies[Math.floor(Math.random() * proxies.length)] : null;
+            const axiosInstance = createAxiosInstance(proxy);
 
-                const proxyUrl = `http://${proxy}`;
-                const proxyAgent = axios.create({
-                    proxy: { host: proxyUrl, port: 80 },
-                });
-
-                response = await proxyAgent.get(url, { timeout: 10000 });
-            } else {
-                response = await axios.get(url, { timeout: 10000 });
+            try {
+                const response = await axiosInstance.get(url);
+                if (response.status === 200) {
+                    count++;
+                    updateLine(`${chalk.green("[+] ")}Successful request! Total sent views: ${chalk.yellow(count)}`);
+                }
+            } catch (error) {
+                updateLine(`${chalk.red("[-] ")}Error making request: ${error.message}`);
             }
-
-            if (response.status === 200) {
-                count++;
-                updateLine(
-                    `${chalk.green(
-                        "[+] "
-                    )}Successful request! Total sended views: ${chalk.yellow(
-                        count
-                    )}`
-                );
-            } else {
-                updateLine(`${chalk.red("[-] ")}Error request.`);
-            }
-        } catch (error) {
-            updateLine(
-                `${chalk.red("[-] ")}Error making request: ${error.message}`
-            );
         }
-    }
+    });
+
+    await Promise.all(requests);
+};
+
+const run = async () => {
+    const concurrency = 300; // Adjust as needed based on network limits and proxy availability
+    const url = config.counter_url;
+
+    console.log("Starting to send requests...");
+    await sendRequests(url, concurrency);
 };
 
 run();
